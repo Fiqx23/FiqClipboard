@@ -1,0 +1,1244 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FiqClipboard - P2P WebRTC Clipboard & File Synchronizer</title>
+
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            brand: {
+              50: '#ecfdf5',
+              500: '#10b981',
+              600: '#059669',
+              dark: '#0f172a',
+              card: '#1e293b',
+              border: '#334155'
+            }
+          },
+          fontFamily: {
+            mono: ['JetBrains Mono', 'Fira Code', 'Courier New', 'monospace']
+          }
+        }
+      }
+    };
+  </script>
+
+  <!-- PeerJS & QRCode.js -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <style>
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+
+    @keyframes pulse-ring {
+      0% { transform: scale(0.95); opacity: 0.8; }
+      50% { transform: scale(1.4); opacity: 0; }
+      100% { transform: scale(0.95); opacity: 0; }
+    }
+    .status-ring {
+      animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+    }
+
+    .dropzone-active {
+      border-color: #10b981 !important;
+      background-color: rgba(16, 185, 129, 0.08) !important;
+    }
+
+    #qrcode canvas, #qrcode img {
+      margin: 0 auto;
+      border-radius: 0.5rem;
+    }
+  </style>
+</head>
+
+<body class="bg-[#0b1120] text-slate-100 min-h-screen font-sans antialiased selection:bg-emerald-500/30 selection:text-emerald-300">
+  <div class="max-w-6xl mx-auto px-4 py-6 md:py-10 flex flex-col min-h-screen">
+    
+    <!-- Top Header -->
+    <header class="flex flex-wrap items-center justify-between gap-4 pb-6 border-b border-slate-800/80 mb-8">
+      <div class="flex items-center space-x-3">
+        <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-emerald-500 to-indigo-600 flex items-center justify-center shadow-lg shadow-emerald-500/20">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" />
+          </svg>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-xl font-bold tracking-tight text-white">PeerClip</h1>
+            <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">P2P v1.1</span>
+          </div>
+          <p class="text-xs text-slate-400">P2P WebRTC clipboard & small file sync (&lt;5MB)</p>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-3">
+        <div id="connectionStatusBadge" class="flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 text-xs font-medium">
+          <span class="relative flex h-2 w-2">
+            <span id="statusPulse" class="absolute inline-flex h-full w-full rounded-full opacity-75"></span>
+            <span id="statusDot" class="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+          </span>
+          <span id="statusText">Disconnected</span>
+        </div>
+
+        <button id="reconnectBtn" class="hidden items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 rounded-lg border border-slate-700 transition">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Reconnect
+        </button>
+      </div>
+    </header>
+
+    <main class="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+      
+      <!-- LEFT COLUMN: Pairing Card -->
+      <section class="lg:col-span-4 flex flex-col gap-6">
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur relative overflow-hidden">
+          <div class="absolute top-0 right-0 w-32 h-32 bg-emerald-500/5 rounded-full blur-2xl pointer-events-none"></div>
+          
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Device ID</span>
+            <span class="text-[11px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/50 px-2 py-0.5 rounded">Ready</span>
+          </div>
+
+          <div class="flex items-center justify-between bg-slate-950/80 border border-slate-800 rounded-xl p-3 mb-4">
+            <div class="flex items-center gap-2">
+              <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+              <span id="localPeerIdDisplay" class="font-mono text-2xl font-bold tracking-widest text-emerald-400">-----</span>
+            </div>
+            <button id="copyIdBtn" title="Copy ID" class="p-2 text-slate-400 hover:text-white bg-slate-800 hover:bg-slate-700 rounded-lg transition active:scale-95">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+            </button>
+          </div>
+
+          <div class="bg-slate-950/60 border border-slate-800/80 rounded-xl p-4 flex flex-col items-center text-center">
+            <div id="qrcode" class="p-2.5 bg-white rounded-lg shadow-inner inline-block min-h-[148px] min-w-[148px] flex items-center justify-center">
+              <span class="text-slate-400 text-xs font-mono">Generating QR...</span>
+            </div>
+            <p class="text-xs text-slate-400 mt-3">Scan with mobile camera to sync instantly</p>
+            <button id="copyShareLinkBtn" class="mt-2 text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1 font-medium transition">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+              </svg>
+              Copy Pairing URL
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur">
+          <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400 mb-3">Connect to Remote Peer</h2>
+          
+          <form id="connectForm" class="space-y-3">
+            <div>
+              <input 
+                type="text" 
+                id="remotePeerInput" 
+                maxlength="10" 
+                placeholder="Enter 5-char code (e.g. 7K9QM)" 
+                class="w-full uppercase font-mono tracking-wider bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500" 
+                autocomplete="off"
+                spellcheck="false"
+              />
+            </div>
+            <button 
+              type="submit" 
+              id="connectBtn" 
+              class="w-full flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm py-2.5 px-4 rounded-xl shadow-lg shadow-indigo-600/20 transition active:scale-[0.99]"
+            >
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              Connect to Peer
+            </button>
+          </form>
+
+          <div id="connectedPeerInfo" class="hidden mt-4 pt-4 border-t border-slate-800 flex items-center justify-between text-xs">
+            <span class="text-slate-400">Linked Peer:</span>
+            <div class="flex items-center gap-2">
+              <span id="linkedPeerBadge" class="font-mono text-emerald-400 font-bold">-----</span>
+              <button id="disconnectBtn" class="text-rose-400 hover:text-rose-300 font-medium ml-2 transition">Disconnect</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-slate-900/50 border border-slate-800/60 rounded-2xl p-4 text-xs text-slate-400 space-y-2">
+          <div class="flex items-center gap-2 text-slate-300 font-medium">
+            <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Supported Transfers
+          </div>
+          <p>Text snippets, clipboard images, and small files (&lt;5MB) including <code>.html</code>, <code>.md</code>, <code>.js</code>, <code>.json</code>, <code>.py</code>, <code>.txt</code>, and documents.</p>
+        </div>
+      </section>
+
+      <!-- RIGHT COLUMN: Transfer Control & Activity Feed -->
+      <section class="lg:col-span-8 flex flex-col gap-6">
+        
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur">
+          <div class="flex items-center justify-between mb-3">
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-400">Send to Peer</span>
+            <span class="text-xs text-slate-500">P2P DataChannel (&lt;5MB Limit)</span>
+          </div>
+
+          <div class="space-y-3">
+            <textarea 
+              id="clipboardTextInput" 
+              rows="3" 
+              placeholder="Paste or type text, code snippets, or configuration..." 
+              class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition resize-none font-mono"
+            ></textarea>
+
+            <div class="flex flex-wrap items-center justify-between gap-2.5">
+              <div class="flex flex-wrap items-center gap-2">
+                <button 
+                  id="sendTextBtn" 
+                  class="flex items-center gap-1.5 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-emerald-600/20 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled
+                >
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                  </svg>
+                  Send Text
+                </button>
+
+                <button 
+                  id="pasteAndSendBtn" 
+                  class="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-medium border border-slate-700 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled
+                >
+                  <svg class="w-4 h-4 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+                  </svg>
+                  Paste &amp; Send
+                </button>
+              </div>
+
+              <!-- Upload Triggers -->
+              <div class="flex items-center gap-2">
+                <!-- Image Input -->
+                <input type="file" id="imageFileInput" accept="image/*" class="hidden" />
+                <button 
+                  id="selectImageBtn" 
+                  type="button" 
+                  class="flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-medium border border-slate-700 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled
+                >
+                  <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                  </svg>
+                  Send Image
+                </button>
+
+                <!-- Generic Small File Input (<5MB) -->
+                <input type="file" id="genericFileInput" class="hidden" />
+                <button 
+                  id="selectFileBtn" 
+                  type="button" 
+                  class="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-medium border border-slate-700 transition active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled
+                >
+                  <svg class="w-4 h-4 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                  </svg>
+                  Send File (&lt;5MB)
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Drag and Drop Overlay Zone -->
+          <div 
+            id="dropZone" 
+            class="mt-4 border-2 border-dashed border-slate-800 hover:border-slate-700 rounded-xl p-4 text-center transition flex items-center justify-center gap-2 cursor-pointer text-slate-500 hover:text-slate-400"
+          >
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+            </svg>
+            <span class="text-xs">Drag &amp; drop any file/image (&lt;5MB) or click to browse</span>
+          </div>
+        </div>
+
+        <!-- Feed Container -->
+        <div class="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl backdrop-blur flex-1 flex flex-col">
+          <div class="flex items-center justify-between pb-3 border-b border-slate-800/80 mb-4">
+            <div class="flex items-center gap-2">
+              <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-400">Session Feed</h2>
+              <span id="feedCounter" class="text-[10px] font-mono bg-slate-800 text-slate-400 px-1.5 py-0.5 rounded">0 items</span>
+            </div>
+            <button id="clearFeedBtn" class="text-[11px] text-slate-500 hover:text-slate-300 transition">Clear</button>
+          </div>
+
+          <div id="feedContainer" class="space-y-3.5 flex-1 overflow-y-auto max-h-[500px] pr-1">
+            <div id="feedEmptyState" class="py-12 flex flex-col items-center justify-center text-center text-slate-500">
+              <div class="w-12 h-12 rounded-2xl bg-slate-950 border border-slate-800 flex items-center justify-center mb-3">
+                <svg class="w-6 h-6 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                </svg>
+              </div>
+              <p class="text-xs font-medium text-slate-400">No transfers yet</p>
+              <p class="text-[11px] text-slate-600 max-w-xs mt-1">Connect with another browser or device to start transferring files and clipboard items.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="mt-8 pt-4 border-t border-slate-900 flex flex-wrap items-center justify-between text-[11px] text-slate-600">
+      <span>PeerClip • Direct WebRTC P2P DataChannel</span>
+      <span>No cloud storage • Maximum 5MB per file</span>
+    </footer>
+  </div>
+
+  <div id="toastContainer" class="fixed bottom-5 right-5 z-50 flex flex-col gap-2.5 max-w-sm pointer-events-none"></div>
+
+  <!-- Lightbox Modal for Images -->
+  <div id="lightboxModal" class="fixed inset-0 z-50 bg-black/90 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="relative max-w-4xl max-h-[90vh] flex flex-col items-center">
+      <button id="closeLightboxBtn" class="absolute -top-10 right-0 text-slate-400 hover:text-white p-1">
+        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+      <img id="lightboxImage" src="" alt="Full view" class="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl border border-slate-800" />
+      <span id="lightboxCaption" class="text-xs font-mono text-slate-400 mt-2"></span>
+    </div>
+  </div>
+
+  <script>
+    const CHUNK_SIZE = 16 * 1024; // 16 KB chunk
+    const BUFFER_HIGH_WATERMARK = 64 * 1024; // 64 KB flow control backpressure
+    const MAX_FEED_ITEMS = 5;
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB hard limit
+
+    const state = {
+      myPeerId: null,
+      targetPeerId: null,
+      peer: null,
+      connection: null,
+      isConnected: false,
+      isConnecting: false,
+      feed: [],
+      incomingTransfers: new Map()
+    };
+
+    const el = {
+      localPeerIdDisplay: document.getElementById('localPeerIdDisplay'),
+      qrcode: document.getElementById('qrcode'),
+      copyIdBtn: document.getElementById('copyIdBtn'),
+      copyShareLinkBtn: document.getElementById('copyShareLinkBtn'),
+      remotePeerInput: document.getElementById('remotePeerInput'),
+      connectForm: document.getElementById('connectForm'),
+      connectBtn: document.getElementById('connectBtn'),
+      connectionStatusBadge: document.getElementById('connectionStatusBadge'),
+      statusDot: document.getElementById('statusDot'),
+      statusPulse: document.getElementById('statusPulse'),
+      statusText: document.getElementById('statusText'),
+      reconnectBtn: document.getElementById('reconnectBtn'),
+      connectedPeerInfo: document.getElementById('connectedPeerInfo'),
+      linkedPeerBadge: document.getElementById('linkedPeerBadge'),
+      disconnectBtn: document.getElementById('disconnectBtn'),
+      clipboardTextInput: document.getElementById('clipboardTextInput'),
+      sendTextBtn: document.getElementById('sendTextBtn'),
+      pasteAndSendBtn: document.getElementById('pasteAndSendBtn'),
+      imageFileInput: document.getElementById('imageFileInput'),
+      selectImageBtn: document.getElementById('selectImageBtn'),
+      genericFileInput: document.getElementById('genericFileInput'),
+      selectFileBtn: document.getElementById('selectFileBtn'),
+      dropZone: document.getElementById('dropZone'),
+      feedContainer: document.getElementById('feedContainer'),
+      feedEmptyState: document.getElementById('feedEmptyState'),
+      feedCounter: document.getElementById('feedCounter'),
+      clearFeedBtn: document.getElementById('clearFeedBtn'),
+      toastContainer: document.getElementById('toastContainer'),
+      lightboxModal: document.getElementById('lightboxModal'),
+      lightboxImage: document.getElementById('lightboxImage'),
+      lightboxCaption: document.getElementById('lightboxCaption'),
+      closeLightboxBtn: document.getElementById('closeLightboxBtn')
+    };
+
+    function generateReadableId() {
+      const alphabet = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
+      let id = '';
+      for (let i = 0; i < 5; i++) {
+        id += alphabet.charAt(Math.floor(Math.random() * alphabet.length));
+      }
+      return id;
+    }
+
+    function showToast(message, type = 'info') {
+      const toast = document.createElement('div');
+      toast.className = 'pointer-events-auto flex items-center gap-2.5 px-4 py-3 rounded-xl border text-xs shadow-2xl backdrop-blur transition-all duration-300 transform translate-y-2 opacity-0';
+
+      const typeStyles = {
+        success: 'bg-emerald-950/90 border-emerald-800/80 text-emerald-200',
+        error: 'bg-rose-950/90 border-rose-800/80 text-rose-200',
+        warning: 'bg-amber-950/90 border-amber-800/80 text-amber-200',
+        info: 'bg-slate-900/95 border-slate-800 text-slate-200'
+      };
+
+      const typeIcons = {
+        success: `<svg class="w-4 h-4 text-emerald-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>`,
+        error: `<svg class="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>`,
+        warning: `<svg class="w-4 h-4 text-amber-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>`,
+        info: `<svg class="w-4 h-4 text-indigo-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>`
+      };
+
+      toast.classList.add(...(typeStyles[type] || typeStyles.info).split(' '));
+      toast.innerHTML = `
+        ${typeIcons[type] || typeIcons.info}
+        <span class="flex-1 font-medium">${message}</span>
+      `;
+
+      el.toastContainer.appendChild(toast);
+      requestAnimationFrame(() => {
+        toast.classList.remove('translate-y-2', 'opacity-0');
+      });
+
+      setTimeout(() => {
+        toast.classList.add('translate-y-2', 'opacity-0');
+        setTimeout(() => toast.remove(), 300);
+      }, 3500);
+    }
+
+    async function copyTextToClipboard(text) {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch (err) {
+          console.warn('Clipboard writeText failed', err);
+        }
+      }
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        return success;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    function setConnectionStatus(status, remoteId = null) {
+      state.isConnecting = (status === 'connecting');
+      state.isConnected = (status === 'connected');
+
+      el.connectionStatusBadge.className = 'flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-medium transition-colors ';
+      el.statusPulse.className = 'absolute inline-flex h-full w-full rounded-full opacity-75 ';
+      
+      if (status === 'connected') {
+        el.connectionStatusBadge.classList.add('bg-emerald-500/10', 'border', 'border-emerald-500/30', 'text-emerald-400');
+        el.statusDot.className = 'relative inline-flex rounded-full h-2 w-2 bg-emerald-500';
+        el.statusPulse.classList.add('bg-emerald-400', 'status-ring');
+        el.statusText.textContent = `Connected P2P`;
+        
+        el.connectedPeerInfo.classList.remove('hidden');
+        el.linkedPeerBadge.textContent = remoteId || state.targetPeerId || 'REMOTE';
+        el.reconnectBtn.classList.add('hidden');
+        
+        el.sendTextBtn.disabled = false;
+        el.pasteAndSendBtn.disabled = false;
+        el.selectImageBtn.disabled = false;
+        el.selectFileBtn.disabled = false;
+      } else if (status === 'connecting') {
+        el.connectionStatusBadge.classList.add('bg-amber-500/10', 'border', 'border-amber-500/30', 'text-amber-400');
+        el.statusDot.className = 'relative inline-flex rounded-full h-2 w-2 bg-amber-500';
+        el.statusPulse.classList.add('bg-amber-400', 'animate-ping');
+        el.statusText.textContent = 'Connecting...';
+
+        el.connectedPeerInfo.classList.add('hidden');
+        el.reconnectBtn.classList.add('hidden');
+
+        el.sendTextBtn.disabled = true;
+        el.pasteAndSendBtn.disabled = true;
+        el.selectImageBtn.disabled = true;
+        el.selectFileBtn.disabled = true;
+      } else {
+        el.connectionStatusBadge.classList.add('bg-rose-500/10', 'border', 'border-rose-500/30', 'text-rose-400');
+        el.statusDot.className = 'relative inline-flex rounded-full h-2 w-2 bg-rose-500';
+        el.statusPulse.className = 'hidden';
+        el.statusText.textContent = 'Disconnected';
+
+        el.connectedPeerInfo.classList.add('hidden');
+        if (state.targetPeerId) {
+          el.reconnectBtn.classList.remove('hidden');
+        }
+
+        el.sendTextBtn.disabled = true;
+        el.pasteAndSendBtn.disabled = true;
+        el.selectImageBtn.disabled = true;
+        el.selectFileBtn.disabled = true;
+      }
+    }
+
+    function renderQRCode(peerId) {
+      el.qrcode.innerHTML = '';
+      const url = new URL(window.location.href);
+      url.searchParams.set('join', peerId);
+
+      new QRCode(el.qrcode, {
+        text: url.toString(),
+        width: 136,
+        height: 136,
+        colorDark: "#0f172a",
+        colorLight: "#ffffff",
+        correctLevel: QRCode.CorrectLevel.M
+      });
+    }
+
+    function initPeer() {
+      const shortId = generateReadableId();
+      state.myPeerId = shortId;
+      const fullPeerId = `peerclip-${shortId.toLowerCase()}`;
+
+      el.localPeerIdDisplay.textContent = shortId;
+      renderQRCode(shortId);
+
+      state.peer = new Peer(fullPeerId, { debug: 1 });
+
+      state.peer.on('open', (id) => {
+        const params = new URLSearchParams(window.location.search);
+        const joinTarget = params.get('join');
+        if (joinTarget && joinTarget.toUpperCase() !== shortId) {
+          showToast(`Auto-pairing with Peer ${joinTarget.toUpperCase()}...`, 'info');
+          el.remotePeerInput.value = joinTarget.toUpperCase();
+          connectToPeer(joinTarget);
+        }
+      });
+
+      state.peer.on('connection', (conn) => {
+        setupDataConnection(conn);
+      });
+
+      state.peer.on('disconnected', () => {
+        if (state.peer && !state.peer.destroyed) state.peer.reconnect();
+      });
+
+      state.peer.on('error', (err) => {
+        console.error('[PeerClip] Peer error:', err);
+        if (err.type === 'unavailable-id') {
+          initPeer();
+        } else if (err.type === 'peer-unavailable') {
+          showToast('Target peer not found. Check the ID.', 'error');
+          setConnectionStatus('disconnected');
+        } else {
+          showToast(`Network error: ${err.type || 'WebRTC failure'}`, 'error');
+          setConnectionStatus('disconnected');
+        }
+      });
+    }
+
+    function connectToPeer(targetId) {
+      if (!targetId || targetId.trim() === '') {
+        showToast('Enter a valid Peer ID', 'warning');
+        return;
+      }
+
+      const cleanTarget = targetId.trim().toUpperCase();
+      if (cleanTarget === state.myPeerId) {
+        showToast('Cannot connect to your own device ID', 'warning');
+        return;
+      }
+
+      const remoteFullId = `peerclip-${cleanTarget.toLowerCase()}`;
+      state.targetPeerId = cleanTarget;
+      setConnectionStatus('connecting');
+
+      const conn = state.peer.connect(remoteFullId, { reliable: true });
+      setupDataConnection(conn);
+    }
+
+    function setupDataConnection(conn) {
+      if (state.connection) {
+        try { state.connection.close(); } catch (e) {}
+      }
+
+      state.connection = conn;
+
+      conn.on('open', () => {
+        const rawRemote = conn.peer.replace('peerclip-', '').toUpperCase();
+        state.targetPeerId = rawRemote;
+        setConnectionStatus('connected', rawRemote);
+        showToast(`Connected P2P to ${rawRemote}!`, 'success');
+      });
+
+      conn.on('data', (payload) => {
+        handleIncomingData(payload);
+      });
+
+      conn.on('close', () => {
+        setConnectionStatus('disconnected');
+        showToast('Peer disconnected', 'warning');
+      });
+
+      conn.on('error', (err) => {
+        console.error('[PeerClip] Connection error:', err);
+        setConnectionStatus('disconnected');
+        showToast('Connection interrupted', 'error');
+      });
+    }
+
+    function disconnectActivePeer() {
+      if (state.connection) {
+        state.connection.close();
+        state.connection = null;
+      }
+      setConnectionStatus('disconnected');
+      showToast('Disconnected from peer', 'info');
+    }
+
+    // Unified chunked sender for both Images and Small Files (<5MB)
+    async function sendFileInChunks(file) {
+      if (!state.isConnected || !state.connection) {
+        showToast('Please connect to a peer first', 'warning');
+        return;
+      }
+
+      if (file.size > MAX_FILE_SIZE) {
+        showToast(`File "${file.name}" exceeds 5MB limit (${formatBytes(file.size)})`, 'warning');
+        return;
+      }
+
+      const isImg = file.type.startsWith('image/');
+      const fileCategory = isImg ? 'image' : 'file';
+      const transferId = (isImg ? 'img_' : 'file_') + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const arrayBuffer = await file.arrayBuffer();
+      const totalBytes = arrayBuffer.byteLength;
+      const totalChunks = Math.ceil(totalBytes / CHUNK_SIZE);
+
+      addFeedItem({
+        id: transferId,
+        type: fileCategory,
+        direction: 'out',
+        filename: file.name || 'document',
+        mime: file.type || 'application/octet-stream',
+        size: totalBytes,
+        blob: file,
+        progress: 0,
+        timestamp: new Date()
+      });
+
+      try {
+        state.connection.send({
+          type: 'FILE_START',
+          id: transferId,
+          category: fileCategory,
+          name: file.name || 'file',
+          mime: file.type || 'application/octet-stream',
+          size: totalBytes,
+          totalChunks: totalChunks
+        });
+
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * CHUNK_SIZE;
+          const end = Math.min(start + CHUNK_SIZE, totalBytes);
+          const chunk = arrayBuffer.slice(start, end);
+
+          const dc = state.connection.dataChannel;
+          if (dc && dc.bufferedAmount > BUFFER_HIGH_WATERMARK) {
+            await new Promise(resolve => {
+              const checkBuffer = () => {
+                if (!state.connection || !state.connection.dataChannel || state.connection.dataChannel.bufferedAmount <= CHUNK_SIZE * 2) {
+                  resolve();
+                } else {
+                  setTimeout(checkBuffer, 20);
+                }
+              };
+              checkBuffer();
+            });
+          }
+
+          state.connection.send({
+            type: 'FILE_CHUNK',
+            id: transferId,
+            index: i,
+            data: chunk
+          });
+
+          const pct = Math.round(((i + 1) / totalChunks) * 100);
+          updateFeedItemProgress(transferId, pct);
+        }
+
+        state.connection.send({
+          type: 'FILE_END',
+          id: transferId
+        });
+
+        updateFeedItemProgress(transferId, 100);
+        showToast(`Sent ${file.name} (${formatBytes(totalBytes)})`, 'success');
+      } catch (err) {
+        console.error('Error sending file:', err);
+        showToast('Failed to transmit file data', 'error');
+      }
+    }
+
+    function handleIncomingData(data) {
+      if (!data || typeof data !== 'object') return;
+
+      if (data.type === 'TEXT') {
+        addFeedItem({
+          id: 'text_' + Date.now(),
+          type: 'text',
+          direction: 'in',
+          text: data.payload,
+          timestamp: new Date()
+        });
+        showToast('New clipboard text received!', 'info');
+        return;
+      }
+
+      if (data.type === 'FILE_START') {
+        state.incomingTransfers.set(data.id, {
+          id: data.id,
+          category: data.category || 'file',
+          name: data.name,
+          mime: data.mime,
+          size: data.size,
+          totalChunks: data.totalChunks,
+          chunks: new Array(data.totalChunks),
+          receivedChunks: 0
+        });
+
+        addFeedItem({
+          id: data.id,
+          type: data.category || 'file',
+          direction: 'in',
+          filename: data.name,
+          mime: data.mime,
+          size: data.size,
+          progress: 1,
+          timestamp: new Date()
+        });
+        return;
+      }
+
+      if (data.type === 'FILE_CHUNK') {
+        const transfer = state.incomingTransfers.get(data.id);
+        if (!transfer) return;
+
+        transfer.chunks[data.index] = data.data;
+        transfer.receivedChunks++;
+
+        const pct = Math.round((transfer.receivedChunks / transfer.totalChunks) * 100);
+        updateFeedItemProgress(data.id, pct);
+        return;
+      }
+
+      if (data.type === 'FILE_END') {
+        const transfer = state.incomingTransfers.get(data.id);
+        if (!transfer) return;
+
+        const blob = new Blob(transfer.chunks, { type: transfer.mime || 'application/octet-stream' });
+        completeIncomingFeed(data.id, blob);
+        state.incomingTransfers.delete(data.id);
+        showToast(`Received ${transfer.name} (${formatBytes(blob.size)})`, 'success');
+      }
+    }
+
+    function sendTextMessage(text) {
+      if (!text || text.trim() === '') return;
+      if (!state.isConnected || !state.connection) {
+        showToast('Please connect to a peer first', 'warning');
+        return;
+      }
+
+      state.connection.send({
+        type: 'TEXT',
+        payload: text,
+        timestamp: Date.now()
+      });
+
+      addFeedItem({
+        id: 'text_' + Date.now(),
+        type: 'text',
+        direction: 'out',
+        text: text,
+        timestamp: new Date()
+      });
+
+      el.clipboardTextInput.value = '';
+      showToast('Text sent to peer!', 'success');
+    }
+
+    function addFeedItem(item) {
+      state.feed.unshift(item);
+      if (state.feed.length > MAX_FEED_ITEMS) {
+        state.feed.pop();
+      }
+      renderFeed();
+      return item;
+    }
+
+    function updateFeedItemProgress(id, progressPct) {
+      const target = state.feed.find(i => i.id === id);
+      if (target) {
+        target.progress = progressPct;
+        const progressEl = document.getElementById(`progress-bar-${id}`);
+        const textEl = document.getElementById(`progress-text-${id}`);
+        if (progressEl) progressEl.style.width = `${progressPct}%`;
+        if (textEl) textEl.textContent = `${progressPct}%`;
+
+        if (progressPct >= 100) {
+          const containerEl = document.getElementById(`progress-container-${id}`);
+          if (containerEl) containerEl.classList.add('hidden');
+        }
+      }
+    }
+
+    function completeIncomingFeed(id, blob) {
+      const target = state.feed.find(i => i.id === id);
+      if (target) {
+        target.blob = blob;
+        target.progress = 100;
+        renderFeed();
+      }
+    }
+
+    function renderFeed() {
+      el.feedContainer.innerHTML = '';
+      el.feedCounter.textContent = `${state.feed.length} / ${MAX_FEED_ITEMS} items`;
+
+      if (state.feed.length === 0) {
+        el.feedContainer.appendChild(el.feedEmptyState);
+        return;
+      }
+
+      state.feed.forEach((item) => {
+        const card = createFeedItemElement(item);
+        el.feedContainer.appendChild(card);
+      });
+    }
+
+    // Detect if file is readable code/text (.html, .md, .js, .json, .txt, etc.)
+    function isTextFile(filename, mime) {
+      const extMatch = filename.match(/\.([a-zA-Z0-9]+)$/);
+      const ext = extMatch ? extMatch[1].toLowerCase() : '';
+      const textExtensions = ['html', 'htm', 'md', 'markdown', 'js', 'json', 'ts', 'jsx', 'tsx', 'css', 'scss', 'txt', 'py', 'sh', 'xml', 'yaml', 'yml', 'env', 'sql'];
+      return textExtensions.includes(ext) || (mime && (mime.startsWith('text/') || mime.includes('json') || mime.includes('javascript')));
+    }
+
+    function createFeedItemElement(item) {
+      const card = document.createElement('div');
+      card.className = 'bg-slate-950/80 border border-slate-800 rounded-xl p-3.5 flex flex-col gap-2.5 transition hover:border-slate-700 relative overflow-hidden';
+
+      const isIncoming = item.direction === 'in';
+      const dirBadge = isIncoming 
+        ? `<span class="inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-400 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-800/40">
+             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg> Received
+           </span>`
+        : `<span class="inline-flex items-center gap-1 text-[10px] font-semibold text-indigo-400 bg-indigo-950/80 px-2 py-0.5 rounded border border-indigo-800/40">
+             <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg> Sent
+           </span>`;
+
+      const timeStr = item.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+      const progressHtml = (item.progress !== undefined && item.progress < 100) ? `
+        <div id="progress-container-${item.id}" class="w-full bg-slate-800 rounded-full h-1.5 mt-1 overflow-hidden">
+          <div id="progress-bar-${item.id}" class="bg-emerald-500 h-1.5 rounded-full transition-all duration-150" style="width: ${item.progress}%"></div>
+        </div>
+        <div class="flex justify-between text-[10px] text-slate-400">
+          <span>Transferring...</span>
+          <span id="progress-text-${item.id}">${item.progress}%</span>
+        </div>
+      ` : '';
+
+      // Text Feed Card
+      if (item.type === 'text') {
+        card.innerHTML = `
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              ${dirBadge}
+              <span class="text-[11px] text-slate-500 font-mono">${timeStr}</span>
+            </div>
+            <button class="copy-text-btn p-1.5 text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 rounded-lg border border-slate-800 transition active:scale-95 flex items-center gap-1 text-xs">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              <span>Copy</span>
+            </button>
+          </div>
+          <div class="bg-slate-900/90 rounded-lg p-2.5 font-mono text-xs text-slate-200 break-all whitespace-pre-wrap max-h-36 overflow-y-auto border border-slate-800/80 select-all">${escapeHtml(item.text)}</div>
+        `;
+
+        const copyBtn = card.querySelector('.copy-text-btn');
+        copyBtn.addEventListener('click', async () => {
+          const ok = await copyTextToClipboard(item.text);
+          if (ok) {
+            showToast('Text copied to clipboard!', 'success');
+          }
+        });
+      } 
+      // Image Feed Card
+      else if (item.type === 'image') {
+        const imgUrl = item.blob ? URL.createObjectURL(item.blob) : '';
+        card.innerHTML = `
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              ${dirBadge}
+              <span class="text-xs font-mono text-slate-300 font-medium truncate max-w-[140px] md:max-w-xs">${escapeHtml(item.filename || 'image.png')}</span>
+              <span class="text-[10px] text-slate-500">(${formatBytes(item.size)})</span>
+            </div>
+            <span class="text-[11px] text-slate-500 font-mono">${timeStr}</span>
+          </div>
+
+          ${progressHtml}
+
+          ${item.blob ? `
+            <div class="flex flex-col sm:flex-row gap-3 mt-1 items-start sm:items-center">
+              <div class="relative group cursor-pointer overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shrink-0 w-28 h-20">
+                <img src="${imgUrl}" alt="${escapeHtml(item.filename)}" class="w-full h-full object-cover group-hover:scale-105 transition duration-200" />
+                <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
+                  <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                </div>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-2">
+                <button class="download-btn flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition active:scale-95">
+                  <svg class="w-3.5 h-3.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  Download
+                </button>
+                <button class="copy-img-btn flex items-center gap-1 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-medium border border-slate-700 transition active:scale-95">
+                  <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 5H6a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2v-1M8 5a2 2 0 002 2h2a2 2 0 002-2M8 5a2 2 0 012-2h2a2 2 0 012 2m0 0h2a2 2 0 012 2v3m2 4H10m0 0l3-3m-3 3l3 3" />
+                  </svg>
+                  Copy Image
+                </button>
+              </div>
+            </div>
+          ` : ''}
+        `;
+
+        if (item.blob) {
+          const thumbEl = card.querySelector('img');
+          if (thumbEl) thumbEl.addEventListener('click', () => openLightbox(imgUrl, item.filename));
+
+          const downloadBtn = card.querySelector('.download-btn');
+          if (downloadBtn) {
+            downloadBtn.addEventListener('click', () => {
+              triggerDownload(imgUrl, item.filename || 'downloaded-image.png');
+            });
+          }
+
+          const copyImgBtn = card.querySelector('.copy-img-btn');
+          if (copyImgBtn) {
+            copyImgBtn.addEventListener('click', async () => {
+              await copyImageBlobToClipboard(item.blob, copyImgBtn);
+            });
+          }
+        }
+      } 
+      // Generic Small File Card (.html, .md, .js, .json, etc.)
+      else if (item.type === 'file') {
+        const ext = (item.filename.split('.').pop() || 'FILE').toUpperCase();
+        const canCopyText = isTextFile(item.filename, item.mime);
+
+        card.innerHTML = `
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              ${dirBadge}
+              <span class="text-xs font-mono text-slate-200 font-semibold truncate max-w-[180px] md:max-w-xs">${escapeHtml(item.filename)}</span>
+              <span class="text-[10px] text-slate-500 font-mono">(${formatBytes(item.size)})</span>
+            </div>
+            <span class="text-[11px] text-slate-500 font-mono">${timeStr}</span>
+          </div>
+
+          ${progressHtml}
+
+          ${item.blob ? `
+            <div class="flex items-center justify-between mt-1 bg-slate-900/60 p-2.5 rounded-xl border border-slate-800/80">
+              <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center font-mono font-bold text-xs">
+                  ${escapeHtml(ext.slice(0, 4))}
+                </div>
+                <div class="flex flex-col">
+                  <span class="text-xs font-medium text-slate-300 truncate max-w-[150px] sm:max-w-xs">${escapeHtml(item.filename)}</span>
+                  <span class="text-[10px] text-slate-500">${escapeHtml(item.mime || 'application/octet-stream')}</span>
+                </div>
+              </div>
+
+              <div class="flex items-center gap-2">
+                ${canCopyText ? `
+                  <button class="copy-file-text-btn flex items-center gap-1 px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-medium border border-slate-700 transition active:scale-95" title="Copy code/text content">
+                    <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                    <span>Copy Text</span>
+                  </button>
+                ` : ''}
+                <button class="download-btn flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-semibold shadow-lg shadow-emerald-600/20 transition active:scale-95">
+                  <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                  </svg>
+                  <span>Download</span>
+                </button>
+              </div>
+            </div>
+          ` : ''}
+        `;
+
+        if (item.blob) {
+          const downloadBtn = card.querySelector('.download-btn');
+          if (downloadBtn) {
+            downloadBtn.addEventListener('click', () => {
+              const url = URL.createObjectURL(item.blob);
+              triggerDownload(url, item.filename);
+              setTimeout(() => URL.revokeObjectURL(url), 1000);
+            });
+          }
+
+          const copyTextBtn = card.querySelector('.copy-file-text-btn');
+          if (copyTextBtn) {
+            copyTextBtn.addEventListener('click', async () => {
+              try {
+                const textContent = await item.blob.text();
+                const ok = await copyTextToClipboard(textContent);
+                if (ok) showToast(`Copied content of ${item.filename}!`, 'success');
+              } catch (e) {
+                showToast('Failed to read file as text', 'error');
+              }
+            });
+          }
+        }
+      }
+
+      return card;
+    }
+
+    function triggerDownload(url, filename) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      showToast(`Downloading ${filename}`, 'info');
+    }
+
+    async function copyImageBlobToClipboard(blob, btnElement) {
+      if (!navigator.clipboard || !window.ClipboardItem) {
+        showToast('Direct image copy unsupported. Please use Download.', 'warning');
+        return;
+      }
+
+      try {
+        let pngBlob = blob;
+        if (blob.type !== 'image/png') {
+          pngBlob = await new Promise((resolve, reject) => {
+            const img = new Image();
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              canvas.toBlob((b) => b ? resolve(b) : reject(new Error('Conversion failed')), 'image/png');
+            };
+            img.onerror = reject;
+            img.src = URL.createObjectURL(blob);
+          });
+        }
+
+        const item = new ClipboardItem({ 'image/png': pngBlob });
+        await navigator.clipboard.write([item]);
+        showToast('Image copied to clipboard!', 'success');
+      } catch (err) {
+        showToast('Image copy restricted. Use download button.', 'error');
+      }
+    }
+
+    function openLightbox(url, caption) {
+      el.lightboxImage.src = url;
+      el.lightboxCaption.textContent = caption || '';
+      el.lightboxModal.classList.remove('hidden');
+      el.lightboxModal.classList.add('flex');
+    }
+
+    function closeLightbox() {
+      el.lightboxModal.classList.add('hidden');
+      el.lightboxModal.classList.remove('flex');
+      el.lightboxImage.src = '';
+    }
+
+    function formatBytes(bytes, decimals = 1) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024;
+      const dm = decimals < 0 ? 0 : decimals;
+      const sizes = ['B', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+    }
+
+    function escapeHtml(text) {
+      if (!text) return '';
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    // Event Listeners
+    el.sendTextBtn.addEventListener('click', () => sendTextMessage(el.clipboardTextInput.value));
+    
+    el.clipboardTextInput.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        sendTextMessage(el.clipboardTextInput.value);
+      }
+    });
+
+    el.pasteAndSendBtn.addEventListener('click', async () => {
+      if (!navigator.clipboard || !navigator.clipboard.readText) {
+        showToast('Clipboard read access denied. Paste directly into text area.', 'warning');
+        return;
+      }
+      try {
+        const text = await navigator.clipboard.readText();
+        if (!text || text.trim() === '') {
+          showToast('Clipboard is empty', 'info');
+          return;
+        }
+        sendTextMessage(text);
+      } catch (err) {
+        showToast('Clipboard permission denied', 'warning');
+      }
+    });
+
+    // Image file button & input
+    el.selectImageBtn.addEventListener('click', () => el.imageFileInput.click());
+    el.imageFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) sendFileInChunks(file);
+      el.imageFileInput.value = '';
+    });
+
+    // Generic file button & input
+    el.selectFileBtn.addEventListener('click', () => el.genericFileInput.click());
+    el.genericFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (file) sendFileInChunks(file);
+      el.genericFileInput.value = '';
+    });
+
+    // Global paste handler for screenshots
+    window.addEventListener('paste', (e) => {
+      if (e.clipboardData && e.clipboardData.items) {
+        const items = e.clipboardData.items;
+        for (let i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image') !== -1) {
+            e.preventDefault();
+            const blob = items[i].getAsFile();
+            if (blob) {
+              const file = new File([blob], `screenshot_${Date.now()}.png`, { type: blob.type });
+              sendFileInChunks(file);
+              showToast('Captured screenshot from clipboard!', 'info');
+              return;
+            }
+          }
+        }
+      }
+    });
+
+    // Drag & Drop for all files and images (<5MB)
+    ['dragenter', 'dragover'].forEach(eventName => {
+      el.dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.dropZone.classList.add('dropzone-active');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      el.dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        el.dropZone.classList.remove('dropzone-active');
+      });
+    });
+
+    el.dropZone.addEventListener('drop', (e) => {
+      const files = e.dataTransfer.files;
+      if (files && files.length > 0) {
+        sendFileInChunks(files[0]);
+      }
+    });
+
+    el.dropZone.addEventListener('click', () => el.genericFileInput.click());
+
+    el.connectForm.addEventListener('submit', (e) => {
+      e.preventDefault();
+      connectToPeer(el.remotePeerInput.value);
+    });
+
+    el.reconnectBtn.addEventListener('click', () => {
+      if (state.targetPeerId) connectToPeer(state.targetPeerId);
+    });
+
+    el.disconnectBtn.addEventListener('click', disconnectActivePeer);
+
+    el.copyIdBtn.addEventListener('click', async () => {
+      if (!state.myPeerId) return;
+      const ok = await copyTextToClipboard(state.myPeerId);
+      if (ok) showToast(`Device ID (${state.myPeerId}) copied!`, 'success');
+    });
+
+    el.copyShareLinkBtn.addEventListener('click', async () => {
+      if (!state.myPeerId) return;
+      const url = new URL(window.location.href);
+      url.searchParams.set('join', state.myPeerId);
+      const ok = await copyTextToClipboard(url.toString());
+      if (ok) showToast('Pairing link copied to clipboard!', 'success');
+    });
+
+    el.clearFeedBtn.addEventListener('click', () => {
+      state.feed = [];
+      renderFeed();
+      showToast('Session feed cleared', 'info');
+    });
+
+    el.closeLightboxBtn.addEventListener('click', closeLightbox);
+    el.lightboxModal.addEventListener('click', (e) => {
+      if (e.target === el.lightboxModal) closeLightbox();
+    });
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && !el.lightboxModal.classList.contains('hidden')) {
+        closeLightbox();
+      }
+    });
+
+    window.addEventListener('DOMContentLoaded', () => {
+      initPeer();
+      renderFeed();
+    });
+  </script>
+</body>
+</html>
